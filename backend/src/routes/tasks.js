@@ -32,6 +32,12 @@ router.post('/', validate({ body: createTaskSchema }), async (req, res) => {
   res.status(201).json({ task });
 });
 
+// Must stay above /:id, otherwise "reminders" is parsed as a task id.
+router.get('/reminders', async (req, res) => {
+  const { today, overdue, dueToday } = await tasks.listReminders(req.user.id);
+  res.json({ today, overdue, dueToday, count: overdue.length + dueToday.length });
+});
+
 router.get('/:id', validate({ params: taskIdParam }), async (req, res) => {
   const task = await tasks.getTaskForUser(req.validated.params.id, req.user.id);
   res.json({ task });

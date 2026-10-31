@@ -98,6 +98,35 @@ export async function listTasks({ userId, teamId, assigneeId, status, q, limit =
   return rows.map(mapTask);
 }
 
+/**
+ * Open tasks assigned to the user that are due today or already overdue.
+ * Dates come from the database so the grouping matches the SQL filter exactly.
+ */
+export async function listReminders(userId) {
+  const [{ rows: dateRows }, { rows }] = await Promise.all([
+    query('SELECT CURRENT_DATE::text AS today'),
+    query(
+      `${TASK_SELECT}
+        JOIN team_members me ON me.team_id = k.team_id AND me.user_id = $1
+       WHERE k.assigned_to = $1
+         AND k.status <> 'done'
+         AND k.due_date IS NOT NULL
+         AND k.due_date <= CURRENT_DATE
+       ORDER BY k.due_date ASC, k.created_at ASC`,
+      [userId],
+    ),
+  ]);
+
+  const today = dateRows[0].today;
+  const reminders = rows.map(mapTask);
+
+  return {
+    today,
+    overdue: reminders.filter((task) => task.dueDate < today),
+    dueToday: reminders.filter((task) => task.dueDate === today),
+  };
+}
+
 export async function updateTask(taskId, changes) {
   const columns = {
     title: 'title',

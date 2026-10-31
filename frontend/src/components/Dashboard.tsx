@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ApiError, api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
-import type { Task, Team, TeamMember } from '../api/types';
+import type { Reminders, Task, Team, TeamMember } from '../api/types';
 import { FilterBar, type Filters } from './FilterBar';
 import { MembersModal } from './MembersModal';
+import { ReminderBanner } from './ReminderBanner';
 import { TaskList } from './TaskList';
 import { TaskModal } from './TaskModal';
 import { TeamModal } from './TeamModal';
@@ -26,6 +27,8 @@ export function Dashboard() {
 
   const [error, setError] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [reminders, setReminders] = useState<Reminders | null>(null);
+  const [remindersDismissed, setRemindersDismissed] = useState(false);
 
   const [taskModal, setTaskModal] = useState<{ open: boolean; task: Task | null }>({
     open: false,
@@ -112,6 +115,25 @@ export function Dashboard() {
       active = false;
     };
   }, [selectedTeamId, debouncedQuery, filters.status, filters.assigneeId, refreshToken]);
+
+  // Due-date reminders are fetched on load and after every refresh.
+  useEffect(() => {
+    let active = true;
+
+    api
+      .get<Reminders>('/tasks/reminders')
+      .then((data) => {
+        if (active) setReminders(data);
+      })
+      .catch(() => {
+        // Reminders are a convenience; never block the dashboard on them.
+        if (active) setReminders(null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [refreshToken]);
 
   // Reset the assignee filter whenever the visible team changes.
   useEffect(() => {
@@ -253,6 +275,15 @@ export function Dashboard() {
               onChange={setFilters}
               onNewTask={() => setTaskModal({ open: true, task: null })}
             />
+
+            {reminders && !remindersDismissed ? (
+              <ReminderBanner
+                overdue={reminders.overdue}
+                dueToday={reminders.dueToday}
+                onOpenTask={(task) => setTaskModal({ open: true, task })}
+                onDismiss={() => setRemindersDismissed(true)}
+              />
+            ) : null}
 
             {error ? (
               <div
