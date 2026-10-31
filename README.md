@@ -44,8 +44,8 @@ search and filters. Built for the Full Stack Development assessment.
 
 - **Frontend:** React 19, TypeScript, Vite, Tailwind CSS (no UI kit, no router, no state library)
 - **Backend:** Node.js, Express 5, Passport (local strategy), Joi, `pg` (no ORM)
-- **Database:** PostgreSQL 16 (Cloud SQL for PostgreSQL in production)
-- **Deploy:** a single container on Google Cloud Run
+- **Database:** PostgreSQL 16
+- **Deploy:** a single Docker container (local or any container host)
 
 ## Architecture
 
@@ -53,14 +53,14 @@ search and filters. Built for the Full Stack Development assessment.
 Browser
   │  HTTPS, HTTP-only session cookie
   ▼
-Cloud Run (one container, scale-to-zero)
+Docker container (one process)
   └── Express 5
       ├── /api/auth    passport-local + express-session + connect-pg-simple
       ├── /api/teams   teams, members, ownership checks
       ├── /api/tasks   tasks, assignment, filters, reminders
       └── /*           serves frontend/dist (React SPA)
             │
-            └── Cloud SQL for PostgreSQL (sessions + application data)
+            └── PostgreSQL (sessions + application data)
 ```
 
 The API and the SPA share one origin. That removes CORS entirely and lets the session cookie work
@@ -139,13 +139,9 @@ cd frontend && npm run build    # typecheck + production build
 
 | Variable | Default (dev) | Notes |
 | --- | --- | --- |
-| `NODE_ENV` | `development` | `production` requires `SESSION_SECRET` and either `DATABASE_URL` or the Cloud SQL variables |
-| `PORT` | `3000` | Cloud Run injects `8080` |
+| `NODE_ENV` | `development` | `production` requires `SESSION_SECRET` and `DATABASE_URL` |
+| `PORT` | `3000` | The Docker image defaults to `8080` |
 | `DATABASE_URL` | local Docker Postgres | TCP connection string for local, CI or any hosted Postgres |
-| `INSTANCE_CONNECTION_NAME` | – | `project:region:instance`; when set, the app connects through `/cloudsql/<instance>` |
-| `DB_USER` | – | Database user for the Cloud SQL socket connection |
-| `DB_PASSWORD` | – | Database password (prefer a Secret Manager reference) |
-| `DB_NAME` | – | Database name, e.g. `team_task` |
 | `SESSION_SECRET` | dev-only value | Required in production |
 | `SESSION_TTL_DAYS` | `7` | Cookie and session lifetime |
 | `COOKIE_SECURE` | `true` in production | Set to `false` only for local HTTP tests |
@@ -211,7 +207,7 @@ curl -b cookies.txt -H 'Content-Type: application/json' \
 - **Transport:** Helmet with a strict CSP, HSTS, `nosniff` and `SAMEORIGIN` framing.
 - **Abuse:** rate limiting on login and register; state-changing requests with a foreign `Origin`
   are rejected.
-- **Secrets:** `.env` is git-ignored; production values are injected by Cloud Run.
+- **Secrets:** `.env` is git-ignored; production values are injected through environment variables.
 
 ## Testing
 
@@ -242,104 +238,10 @@ docker run --rm -p 8080:8080 --network host \
 The image is a multi-stage build with a distroless Node 22 runtime (no shell, no package manager,
 non-root user) and comes in at ~219 MB. Migrations run automatically on boot.
 
-## Deployment (Cloud SQL + Cloud Run)
+## Deployment status
 
-The brief requires a database service on Google Cloud Platform, so production uses
-**Cloud SQL for PostgreSQL**. Cloud Run connects through its built-in Cloud SQL connector
-(a Unix socket), so no proxy or VPC connector runs inside the container.
-
-### 1. Create the database
-
-```bash
-export PROJECT_ID=your-project-id
-export REGION=us-central1
-export INSTANCE=team-task-db
-
-gcloud services enable sqladmin.googleapis.com run.googleapis.com \
-  cloudbuild.googleapis.com artifactregistry.googleapis.com
-
-gcloud sql instances create "$INSTANCE" \
-  --database-version=POSTGRES_16 \
-  --tier=db-f1-micro \
-  --region="$REGION" \
-  --storage-size=10GB \
-  --storage-auto-increase
-
-gcloud sql databases create team_task --instance="$INSTANCE"
-
-DB_PASSWORD="$(openssl rand -base64 24)"
-gcloud sql users create app --instance="$INSTANCE" --password="$DB_PASSWORD"
-```
-
-### 2. Store the secrets
-
-```bash
-printf '%s' "$DB_PASSWORD" | gcloud secrets create db-password --data-file=-
-openssl rand -base64 48 | gcloud secrets create session-secret --data-file=-
-
-PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
-for secret in db-password session-secret; do
-  gcloud secrets add-iam-policy-binding "$secret" \
-    --member="serviceAccount:$PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-    --role=roles/secretmanager.secretAccessor
-done
-```
-
-### 3. Deploy
-
-```bash
-gcloud run deploy team-task-manager \
-  --source . \
-  --region "$REGION" \
-  --allow-unauthenticated \
-  --memory 512Mi \
-  --cpu 1 \
-  --max-instances 2 \
-  --min-instances 0 \
-  --add-cloudsql-instances "$PROJECT_ID:$REGION:$INSTANCE" \
-  --set-env-vars "NODE_ENV=production,INSTANCE_CONNECTION_NAME=$PROJECT_ID:$REGION:$INSTANCE,DB_NAME=team_task,DB_USER=app" \
-  --set-secrets "DB_PASSWORD=db-password:latest,SESSION_SECRET=session-secret:latest"
-```
-
-Migrations run automatically on the first boot.
-
-### 4. Seed the demo data
-
-Cloud Run has no shell, so run the seed through the Cloud SQL Auth Proxy from your machine:
-
-```bash
-# terminal 1
-cloud-sql-proxy "$PROJECT_ID:$REGION:$INSTANCE" --port 5433
-
-# terminal 2
-cd backend
-DATABASE_URL="postgres://app:$DB_PASSWORD@127.0.0.1:5433/team_task" npm run seed
-```
-
-### 5. Verify
-
-```bash
-cd backend && ./scripts/smoke.sh https://YOUR-SERVICE-URL
-```
-
-### Cost
-
-Cloud Run, Cloud Build and Artifact Registry stay within their always-free allowances at demo
-traffic. Cloud SQL has **no permanent free tier**: `db-f1-micro` with 10 GB costs roughly
-**$9–10/month**, covered by the $300 / 90-day trial credit. Stop or delete the instance when
-you are finished:
-
-```bash
-gcloud sql instances patch "$INSTANCE" --activation-policy=NEVER   # stop
-gcloud sql instances delete "$INSTANCE"                            # remove
-```
-
-Notes:
-
-- Leave `COOKIE_SECURE` unset on Cloud Run (it is HTTPS); set it to `false` only for local HTTP.
-- `DATABASE_URL` and the `INSTANCE_CONNECTION_NAME` path are mutually exclusive; the socket
-  configuration wins when both are present.
-- Cloud Run scales to zero, so there is no idle compute cost. `--max-instances 2` caps spending.
+The app is not deployed to a public host. It runs locally as a single Docker container
+(see above); the same image can be pushed to any container host.
 
 ## Design decisions
 
