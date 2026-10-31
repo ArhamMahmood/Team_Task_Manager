@@ -6,7 +6,7 @@ pg.types.setTypeParser(1082, (value) => value);
 
 /**
  * Build a pool config from a connection string.
- * Local Postgres runs without TLS; Neon (and any managed host) requires it.
+ * Local Postgres runs without TLS; any managed host requires it.
  * `sslmode` is stripped because node-postgres configures TLS explicitly.
  */
 export function buildPoolConfig(connectionString) {
@@ -23,7 +23,34 @@ export function buildPoolConfig(connectionString) {
   };
 }
 
-export const pool = config.databaseUrl ? new pg.Pool(buildPoolConfig(config.databaseUrl)) : null;
+/**
+ * Cloud SQL from Cloud Run: the platform mounts a Unix socket per instance and
+ * the connection is local to the VM, so TLS is neither needed nor supported.
+ */
+export function buildCloudSqlPoolConfig({ instanceConnectionName, user, password, database }) {
+  return {
+    host: `/cloudsql/${instanceConnectionName}`,
+    user,
+    password,
+    database,
+    ssl: false,
+    max: 3,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000,
+  };
+}
+
+function createPool() {
+  if (config.cloudSql.instanceConnectionName) {
+    return new pg.Pool(buildCloudSqlPoolConfig(config.cloudSql));
+  }
+  if (config.databaseUrl) {
+    return new pg.Pool(buildPoolConfig(config.databaseUrl));
+  }
+  return null;
+}
+
+export const pool = createPool();
 
 export async function query(text, params) {
   if (!pool) throw new Error('Database is not configured.');

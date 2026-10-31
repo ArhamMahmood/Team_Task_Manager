@@ -45,3 +45,10 @@ export type ValidationDetail = {
   path: string;
   message: string;
 };
+
+export type Reminders = {
+  today: string;
+  overdue: Task[];
+  dueToday: Task[];
+  count: number;
+};

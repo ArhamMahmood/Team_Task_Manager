@@ -57,14 +57,20 @@ export function createApp() {
     }
   });
 
-  app.use('/api/auth/login', authLimiter);
-  app.use('/api/auth/register', authLimiter);
-  app.use('/api/auth', authRoutes);
-  app.use('/api/teams', teamRoutes);
-  app.use('/api/tasks', taskRoutes);
-  app.use('/api/users', userRoutes);
+  // The brief names /auth, /teams and /tasks; /api/* is the convention the SPA
+  // uses. Mounting the same routers twice keeps both contracts working.
+  for (const prefix of ['/api', '']) {
+    app.use(`${prefix}/auth/login`, authLimiter);
+    app.use(`${prefix}/auth/register`, authLimiter);
+    app.use(`${prefix}/auth`, authRoutes);
+    app.use(`${prefix}/teams`, teamRoutes);
+    app.use(`${prefix}/tasks`, taskRoutes);
+    app.use(`${prefix}/users`, userRoutes);
+  }
 
+  // Unknown API paths must return JSON, not the SPA's index.html.
   app.use('/api', notFound);
+  app.use(['/auth', '/teams', '/tasks', '/users'], notFound);
 
   // In production the API also serves the built SPA (single origin, same cookies).
   if (config.serveStatic && fs.existsSync(distDir)) {
