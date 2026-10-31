@@ -21,7 +21,7 @@ const distDir = path.resolve(here, '../../frontend/dist');
 export function createApp() {
   const app = express();
 
-  // Cloud Run terminates TLS in front of the app.
+  // A reverse proxy terminates TLS in front of the app.
   app.set('trust proxy', 1);
   app.disable('x-powered-by');
 
